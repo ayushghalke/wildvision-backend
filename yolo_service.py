@@ -1,16 +1,32 @@
 """
 WildVision — YOLO Detection Service
 Loads the pre-trained best.pt model and runs inference on uploaded images.
+Optimized for low-memory environments (Render free tier).
 """
 
-from ultralytics import YOLO
 import os
+import torch
 
-# Load the pre-trained model — check local dir first, then parent dir
-_LOCAL_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best.pt")
-_PARENT_MODEL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "best.pt")
-MODEL_PATH = _LOCAL_MODEL if os.path.exists(_LOCAL_MODEL) else _PARENT_MODEL
-model = YOLO(MODEL_PATH)
+# Reduce PyTorch memory usage
+torch.set_num_threads(1)
+
+# Global model reference (lazy-loaded)
+_model = None
+
+
+def _get_model():
+    """Lazy-load the YOLO model on first request to save startup memory."""
+    global _model
+    if _model is None:
+        from ultralytics import YOLO
+
+        # Check local dir first (deployment), then parent dir (local dev)
+        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best.pt")
+        parent_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "best.pt")
+        model_path = local_path if os.path.exists(local_path) else parent_path
+
+        _model = YOLO(model_path)
+    return _model
 
 
 def detect_animal(image_path: str) -> dict:
@@ -19,6 +35,7 @@ def detect_animal(image_path: str) -> dict:
     Returns a dict with 'name', 'confidence', and 'all_detections'.
     """
     try:
+        model = _get_model()
         results = model(image_path)
 
         if len(results) > 0 and len(results[0].boxes) > 0:

@@ -10,8 +10,8 @@ import os
 API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyCQPii0sw55ZKhpNxdOG5WCvA-RTe5oMkA")
 genai.configure(api_key=API_KEY)
 
-# Use Gemini 1.5 Flash for fast responses
-model = genai.GenerativeModel("gemini-1.5-flash")
+# Use Gemini 2.0 Flash for fast responses
+model = genai.GenerativeModel("gemini-2.0-flash")
 
 
 def get_animal_info(animal_name: str) -> str:

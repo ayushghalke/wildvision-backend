@@ -205,6 +205,19 @@ async def chat(request: ChatRequest):
     }
 
 
+# ─── View Users (Admin) ──────────────────────────────────────────────────────
+
+@app.get("/api/users")
+async def list_users():
+    """View all registered users (no passwords shown)."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, email, created_at FROM users ORDER BY created_at DESC")
+    users = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return {"total": len(users), "users": users}
+
+
 # ─── Health Check ────────────────────────────────────────────────────────────
 
 @app.get("/api/health")

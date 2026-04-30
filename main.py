@@ -1,6 +1,7 @@
 """
 WildVision — FastAPI Backend
 Provides REST API endpoints for authentication, YOLO detection, and AI chat.
+Uses SQLite for persistent user storage.
 """
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -9,6 +10,8 @@ from pydantic import BaseModel
 import shutil
 import os
 import uuid
+import sqlite3
+import hashlib
 
 from yolo_service import detect_animal
 from chatbot_service import get_animal_info, answer_question
@@ -28,18 +31,71 @@ app.add_middleware(
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ─── Simple Auth ─────────────────────────────────────────────────────────────
+# ─── SQLite Database ─────────────────────────────────────────────────────────
 
-VALID_USERS = {
-    "admin@wildvision.com": "wild123",
-    "user@wildvision.com": "user123",
-}
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.db")
+
+
+def get_db():
+    """Get a database connection."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def hash_password(password: str) -> str:
+    """Hash a password with SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def init_db():
+    """Initialize the database and seed default users."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Create users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Seed default users (only if they don't exist)
+    default_users = [
+        ("admin@wildvision.com", "wild123"),
+        ("user@wildvision.com", "user123"),
+    ]
+    for email, password in default_users:
+        try:
+            cursor.execute(
+                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
+                (email, hash_password(password))
+            )
+        except sqlite3.IntegrityError:
+            pass  # User already exists
+
+    conn.commit()
+    conn.close()
+
+
+# Initialize DB on startup
+init_db()
 
 # In-memory session tokens
 active_tokens = {}
 
 
+# ─── Request/Response Models ─────────────────────────────────────────────────
+
 class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
     email: str
     password: str
 
@@ -49,9 +105,20 @@ class ChatRequest(BaseModel):
     question: str
 
 
+# ─── Auth Endpoints ──────────────────────────────────────────────────────────
+
 @app.post("/api/login")
 async def login(request: LoginRequest):
-    if request.email in VALID_USERS and VALID_USERS[request.email] == request.password:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM users WHERE email = ? AND password_hash = ?",
+        (request.email, hash_password(request.password))
+    )
+    user = cursor.fetchone()
+    conn.close()
+
+    if user:
         token = str(uuid.uuid4())
         active_tokens[token] = request.email
         return {
@@ -60,6 +127,40 @@ async def login(request: LoginRequest):
             "message": "Welcome to WildVision!"
         }
     raise HTTPException(status_code=401, detail="Invalid email or password")
+
+
+@app.post("/api/register")
+async def register(request: RegisterRequest):
+    # Validate email format (basic check)
+    if not request.email or "@" not in request.email:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    # Validate password length
+    if not request.password or len(request.password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            "INSERT INTO users (email, password_hash) VALUES (?, ?)",
+            (request.email, hash_password(request.password))
+        )
+        conn.commit()
+        conn.close()
+
+        # Auto-login after registration
+        token = str(uuid.uuid4())
+        active_tokens[token] = request.email
+        return {
+            "success": True,
+            "token": token,
+            "message": "Account created! Welcome to WildVision!"
+        }
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Email already registered")
 
 
 # ─── Detection ───────────────────────────────────────────────────────────────

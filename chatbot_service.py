@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 CHAT_PROVIDER = os.environ.get("CHAT_PROVIDER", "auto")  # "ollama", "gemini", or "auto"
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyBsXc5R-Z-oIsxqyi2pkAUIhPkasvYqe6s")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyBkB_iv-1Y6EBP82u_gfLhMrj8kGPCHYbM")
 
 
 # ─── Ollama Provider ─────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ class GeminiProvider:
     def __init__(self, api_key: str = GEMINI_API_KEY):
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash-lite")
+        self.model = genai.GenerativeModel("gemini-2.0-flash")
 
     def is_available(self) -> bool:
         """Gemini is available if we have an API key."""

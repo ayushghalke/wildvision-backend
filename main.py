@@ -12,6 +12,10 @@ import os
 import uuid
 import sqlite3
 import hashlib
+import logging
+
+# Configure logging so provider selection is visible
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:  %(message)s")
 
 from yolo_service import detect_animal
 from chatbot_service import get_animal_info, answer_question

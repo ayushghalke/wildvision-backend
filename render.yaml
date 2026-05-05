@@ -6,3 +6,5 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         sync: false
+      - key: CHAT_PROVIDER
+        value: gemini

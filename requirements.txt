@@ -7,3 +7,4 @@ torchvision
 google-generativeai
 Pillow
 numpy
+requests

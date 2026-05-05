@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 CHAT_PROVIDER = os.environ.get("CHAT_PROVIDER", "auto")  # "ollama", "gemini", or "auto"
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyCQPii0sw55ZKhpNxdOG5WCvA-RTe5oMkA")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyBsXc5R-Z-oIsxqyi2pkAUIhPkasvYqe6s")
 
 
 # ─── Ollama Provider ─────────────────────────────────────────────────────────

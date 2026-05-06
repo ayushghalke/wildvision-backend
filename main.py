@@ -18,7 +18,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:  %(message)s")
 
 from yolo_service import detect_animal
-from chatbot_service import get_animal_info, answer_question
+from chatbot_service import get_animal_info, answer_question, generate_care_packages
 
 app = FastAPI(title="WildVision API", version="1.0.0")
 
@@ -107,6 +107,10 @@ class RegisterRequest(BaseModel):
 class ChatRequest(BaseModel):
     animal_name: str
     question: str
+
+
+class CareRequest(BaseModel):
+    animal_name: str
 
 
 # ─── Auth Endpoints ──────────────────────────────────────────────────────────
@@ -207,6 +211,14 @@ async def chat(request: ChatRequest):
     return {
         "response": response
     }
+
+
+# ─── Care Packages ───────────────────────────────────────────────────────────
+
+@app.post("/api/care-packages")
+async def care_packages(request: CareRequest):
+    data = generate_care_packages(request.animal_name)
+    return data
 
 
 # ─── View Users (Admin) ──────────────────────────────────────────────────────

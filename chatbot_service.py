@@ -161,3 +161,60 @@ def answer_question(animal_name: str, question: str) -> str:
 
     provider = _get_provider()
     return provider.generate(prompt)
+
+
+def generate_care_packages(animal_name: str) -> dict:
+    """
+    Generate 3 tiered care packages (Basic, Standard, Premium) for the animal.
+    Returns a dictionary parsed from the AI's JSON output.
+    """
+    prompt = (
+        f"You are a veterinary and pet store assistant. The user has a '{animal_name}'.\n"
+        f"Generate 3 care packages (Basic, Standard, Premium) including food, vet needs, "
+        f"and medical necessities (antibiotics, vaccines) with estimated USD prices.\n\n"
+        f"You MUST reply ONLY with a valid JSON object matching this exact structure, nothing else:\n"
+        f"{{\n"
+        f"  \"packages\": [\n"
+        f"    {{\n"
+        f"      \"tier\": \"Basic\",\n"
+        f"      \"description\": \"Essential care items.\",\n"
+        f"      \"total_price\": \"$50\",\n"
+        f"      \"items\": [\n"
+        f"        {{\"name\": \"Standard Kibble\", \"price\": \"$20\"}},\n"
+        f"        {{\"name\": \"Basic Vet Checkup\", \"price\": \"$30\"}}\n"
+        f"      ]\n"
+        f"    }}\n"
+        f"  ]\n"
+        f"}}\n\n"
+        f"Output ONLY valid JSON. Do not include markdown code blocks (```json)."
+    )
+
+    provider = _get_provider()
+    response_text = provider.generate(prompt)
+
+    # Clean up response in case it contains markdown blocks
+    response_text = response_text.strip()
+    if response_text.startswith("```json"):
+        response_text = response_text[7:]
+    if response_text.startswith("```"):
+        response_text = response_text[3:]
+    if response_text.endswith("```"):
+        response_text = response_text[:-3]
+    response_text = response_text.strip()
+
+    try:
+        data = json.loads(response_text)
+        return data
+    except Exception as e:
+        logger.error(f"Failed to parse care packages JSON: {e}\nResponse was: {response_text}")
+        # Fallback response
+        return {
+            "packages": [
+                {
+                    "tier": "Error",
+                    "description": "Failed to generate care packages.",
+                    "total_price": "$0",
+                    "items": [{"name": "Please try again later.", "price": "$0"}]
+                }
+            ]
+        }

@@ -1,6 +1,6 @@
 """
-WildVision — Chatbot Service (Dual Provider)
-Uses Ollama locally for development, falls back to Google Gemini for cloud deployment.
+WildVision — Chatbot Service (Triple Provider)
+Provider priority: Ollama (local dev) → Groq (fast cloud, free) → Gemini (ultimate fallback)
 Provider is selected via CHAT_PROVIDER env var or auto-detected.
 """
 
@@ -9,14 +9,23 @@ import json
 import requests
 import logging
 
+# Load .env file if present (local development)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 # ─── Provider Configuration ──────────────────────────────────────────────────
 
-CHAT_PROVIDER = os.environ.get("CHAT_PROVIDER", "auto")  # "ollama", "gemini", or "auto"
+CHAT_PROVIDER   = os.environ.get("CHAT_PROVIDER", "auto")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyBkB_iv-1Y6EBP82u_gfLhMrj8kGPCHYbM")
+OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
+GROQ_API_KEY    = os.environ.get("GROQ_API_KEY", "")
+GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
+GROQ_MODEL      = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 
 # ─── Ollama Provider ─────────────────────────────────────────────────────────
@@ -29,7 +38,6 @@ class OllamaProvider:
         self.model = model
 
     def is_available(self) -> bool:
-        """Check if Ollama is running and the model is accessible."""
         try:
             resp = requests.get(f"{self.base_url}/api/tags", timeout=2)
             return resp.status_code == 200
@@ -37,25 +45,17 @@ class OllamaProvider:
             return False
 
     def generate(self, prompt: str) -> str:
-        """Generate a response from Ollama."""
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
-            "options": {
-                "temperature": 0.7,
-                "num_predict": 300,  # Keep responses concise
-            },
+            "options": {"temperature": 0.7, "num_predict": 300},
         }
         try:
             resp = requests.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=120,  # Local models can be slow on first load
-            )
+                f"{self.base_url}/api/generate", json=payload, timeout=120)
             resp.raise_for_status()
-            data = resp.json()
-            return data.get("response", "No response generated.")
+            return resp.json().get("response", "No response generated.")
         except requests.Timeout:
             return "The local AI model timed out. Please try again."
         except requests.ConnectionError:
@@ -64,24 +64,68 @@ class OllamaProvider:
             return f"Ollama error: {str(e)}"
 
 
+# ─── Groq Provider ───────────────────────────────────────────────────────────
+
+class GroqProvider:
+    """Chat provider using Groq cloud API (LLaMA 3.3 70B — fast & free)."""
+
+    def __init__(self, api_key: str = GROQ_API_KEY):
+        self.api_key = api_key
+        self.client = None
+        if api_key:
+            try:
+                from groq import Groq
+                self.client = Groq(api_key=api_key)
+            except ImportError:
+                logger.warning("groq package not installed. Run: pip install groq")
+
+    def is_available(self) -> bool:
+        return bool(self.api_key and self.client is not None)
+
+    def generate(self, prompt: str) -> str:
+        if not self.client:
+            return "Groq client not available. Install groq package and set GROQ_API_KEY."
+        try:
+            response = self.client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.7,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Groq error: {e}")
+            return f"Groq error: {str(e)}"
+
+
 # ─── Gemini Provider ─────────────────────────────────────────────────────────
 
 class GeminiProvider:
-    """Chat provider using Google Gemini API (cloud)."""
+    """Chat provider using Google Gemini API (cloud fallback)."""
 
     def __init__(self, api_key: str = GEMINI_API_KEY):
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
+        if api_key:
+            from google import genai
+            self.client = genai.Client(api_key=api_key)
+        else:
+            self.client = None
 
     def is_available(self) -> bool:
-        """Gemini is available if we have an API key."""
         return bool(GEMINI_API_KEY)
 
     def generate(self, prompt: str) -> str:
-        """Generate a response from Gemini."""
+        if not GEMINI_API_KEY or self.client is None:
+            return "Gemini API key is not configured."
         try:
-            response = self.model.generate_content(prompt)
+            from google.genai import types
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=400,
+                ),
+            )
             return response.text
         except Exception as e:
             return f"Gemini error: {str(e)}"
@@ -93,7 +137,7 @@ _provider = None
 
 
 def _get_provider():
-    """Select and cache the AI provider based on config / availability."""
+    """Select and cache the AI provider: Ollama → Groq → Gemini."""
     global _provider
     if _provider is not None:
         return _provider
@@ -102,29 +146,35 @@ def _get_provider():
         logger.info("🦙 CHAT_PROVIDER=ollama → Using Ollama")
         _provider = OllamaProvider()
 
+    elif CHAT_PROVIDER == "groq":
+        logger.info("⚡ CHAT_PROVIDER=groq → Using Groq")
+        _provider = GroqProvider()
+
     elif CHAT_PROVIDER == "gemini":
         logger.info("✨ CHAT_PROVIDER=gemini → Using Gemini")
         _provider = GeminiProvider()
 
-    else:  # "auto" — try Ollama first, fallback to Gemini
+    else:  # "auto" — try Ollama → Groq → Gemini
         ollama = OllamaProvider()
         if ollama.is_available():
-            logger.info("🦙 Auto-detected Ollama running locally → Using Ollama")
+            logger.info("🦙 Auto: Ollama running locally → Using Ollama")
             _provider = ollama
         else:
-            logger.info("✨ Ollama not available → Falling back to Gemini")
-            _provider = GeminiProvider()
+            groq_p = GroqProvider()
+            if groq_p.is_available():
+                logger.info("⚡ Auto: Ollama not found → Using Groq (LLaMA 3.3)")
+                _provider = groq_p
+            else:
+                logger.info("✨ Auto: Groq not available → Falling back to Gemini")
+                _provider = GeminiProvider()
 
     return _provider
 
 
-# ─── Public API (same interface as before) ────────────────────────────────────
+# ─── Public API ───────────────────────────────────────────────────────────────
 
 def get_animal_info(animal_name: str) -> str:
-    """
-    Generate an informative description about the detected animal.
-    Works identically whether using Ollama or Gemini.
-    """
+    """Generate an informative description about the detected animal."""
     if animal_name in ("Unknown", "Error"):
         return "I couldn't identify the animal in the image. Please try again with a clearer picture."
 
@@ -138,16 +188,11 @@ def get_animal_info(animal_name: str) -> str:
         f"- 2 interesting facts\n"
         f"Keep it concise and engaging, under 200 words."
     )
-
-    provider = _get_provider()
-    return provider.generate(prompt)
+    return _get_provider().generate(prompt)
 
 
 def answer_question(animal_name: str, question: str) -> str:
-    """
-    Answer a follow-up question about the detected animal.
-    Works identically whether using Ollama or Gemini.
-    """
+    """Answer a follow-up question about the detected animal."""
     if not question or not question.strip():
         return "Please ask a question about the animal."
 
@@ -158,16 +203,11 @@ def answer_question(animal_name: str, question: str) -> str:
         f"Provide a helpful, accurate, and concise answer (under 150 words). "
         f"If the question is unrelated to the animal, politely redirect."
     )
-
-    provider = _get_provider()
-    return provider.generate(prompt)
+    return _get_provider().generate(prompt)
 
 
 def generate_care_packages(animal_name: str) -> dict:
-    """
-    Generate 3 tiered care packages (Basic, Standard, Premium) for the animal.
-    Returns a dictionary parsed from the AI's JSON output.
-    """
+    """Generate 3 tiered care packages (Basic, Standard, Premium) for the animal."""
     prompt = (
         f"You are a veterinary and pet store assistant. The user has a '{animal_name}'.\n"
         f"Generate 3 care packages (Basic, Standard, Premium) including food, vet needs, "
@@ -189,32 +229,28 @@ def generate_care_packages(animal_name: str) -> dict:
         f"Output ONLY valid JSON. Do not include markdown code blocks (```json)."
     )
 
-    provider = _get_provider()
-    response_text = provider.generate(prompt)
+    response_text = _get_provider().generate(prompt)
 
-    # Clean up response in case it contains markdown blocks
+    # Clean up markdown fences if present
     response_text = response_text.strip()
-    if response_text.startswith("```json"):
-        response_text = response_text[7:]
-    if response_text.startswith("```"):
-        response_text = response_text[3:]
+    for fence in ("```json", "```"):
+        if response_text.startswith(fence):
+            response_text = response_text[len(fence):]
     if response_text.endswith("```"):
         response_text = response_text[:-3]
     response_text = response_text.strip()
 
     try:
-        data = json.loads(response_text)
-        return data
+        return json.loads(response_text)
     except Exception as e:
         logger.error(f"Failed to parse care packages JSON: {e}\nResponse was: {response_text}")
-        # Fallback response
         return {
             "packages": [
                 {
                     "tier": "Error",
                     "description": "Failed to generate care packages.",
                     "total_price": "$0",
-                    "items": [{"name": "Please try again later.", "price": "$0"}]
+                    "items": [{"name": "Please try again later.", "price": "$0"}],
                 }
             ]
         }

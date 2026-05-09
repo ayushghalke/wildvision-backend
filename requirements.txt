@@ -4,7 +4,9 @@ python-multipart
 ultralytics
 torch
 torchvision
-google-generativeai
+google-genai
+groq
 Pillow
 numpy
 requests
+python-dotenv

@@ -10,8 +10,10 @@ WORKDIR /app
 
 # Copy requirements and install (CPU-only PyTorch to save ~1GB)
 COPY requirements.txt .
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -r requirements.txt
+# Install CPU-only PyTorch first from the official wheel index
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Install remaining deps (skip torch/torchvision to avoid overwriting with CUDA build from PyPI)
+RUN grep -vE "^(torch|torchvision)" requirements.txt | pip install --no-cache-dir -r /dev/stdin
 
 # Copy application code and model
 COPY . .

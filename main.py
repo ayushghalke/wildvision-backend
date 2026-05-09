@@ -1,7 +1,8 @@
 """
 WildVision — FastAPI Backend
-Provides REST API endpoints for authentication, YOLO detection, and AI chat.
-Uses SQLite for persistent user storage.
+Provides REST API endpoints for authentication, YOLO detection, AI chat,
+sightings map, detection history, analytics, and conservation status.
+Uses SQLite for persistent storage.
 """
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -13,16 +14,16 @@ import uuid
 import sqlite3
 import hashlib
 import logging
+import requests as http_requests
+from datetime import datetime
 
-# Configure logging so provider selection is visible
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:  %(message)s")
 
 from yolo_service import detect_animal
 from chatbot_service import get_animal_info, answer_question, generate_care_packages
 
-app = FastAPI(title="WildVision API", version="1.0.0")
+app = FastAPI(title="WildVision API", version="2.0.0")
 
-# Enable CORS for all origins (needed for Android app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,33 +32,131 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Upload directory
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ─── SQLite Database ─────────────────────────────────────────────────────────
-
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.db")
 
+# ─── Conservation Status Lookup ──────────────────────────────────────────────
+# Offline lookup for common animals (works without IUCN API key)
+CONSERVATION_STATUS = {
+    # Domestic
+    "dog": ("Least Concern", "LC", "#4CAF50"),
+    "cat": ("Least Concern", "LC", "#4CAF50"),
+    "horse": ("Least Concern", "LC", "#4CAF50"),
+    "cow": ("Least Concern", "LC", "#4CAF50"),
+    "sheep": ("Least Concern", "LC", "#4CAF50"),
+    "goat": ("Least Concern", "LC", "#4CAF50"),
+    "chicken": ("Least Concern", "LC", "#4CAF50"),
+    "pig": ("Least Concern", "LC", "#4CAF50"),
+    "rabbit": ("Least Concern", "LC", "#4CAF50"),
+    # Wild — Least Concern
+    "wolf": ("Least Concern", "LC", "#4CAF50"),
+    "fox": ("Least Concern", "LC", "#4CAF50"),
+    "deer": ("Least Concern", "LC", "#4CAF50"),
+    "bear": ("Least Concern", "LC", "#4CAF50"),
+    "monkey": ("Least Concern", "LC", "#4CAF50"),
+    "zebra": ("Least Concern", "LC", "#4CAF50"),
+    "hippopotamus": ("Vulnerable", "VU", "#FF9800"),
+    "hippo": ("Vulnerable", "VU", "#FF9800"),
+    # Vulnerable
+    "lion": ("Vulnerable", "VU", "#FF9800"),
+    "polar bear": ("Vulnerable", "VU", "#FF9800"),
+    "cheetah": ("Vulnerable", "VU", "#FF9800"),
+    "giraffe": ("Vulnerable", "VU", "#FF9800"),
+    "giant panda": ("Vulnerable", "VU", "#FF9800"),
+    "hippopotamus": ("Vulnerable", "VU", "#FF9800"),
+    "african elephant": ("Vulnerable", "VU", "#FF9800"),
+    # Endangered
+    "tiger": ("Endangered", "EN", "#FF5722"),
+    "snow leopard": ("Vulnerable", "VU", "#FF9800"),
+    "gorilla": ("Endangered", "EN", "#FF5722"),
+    "orangutan": ("Endangered", "EN", "#FF5722"),
+    "blue whale": ("Endangered", "EN", "#FF5722"),
+    "asian elephant": ("Endangered", "EN", "#FF5722"),
+    "african wild dog": ("Endangered", "EN", "#FF5722"),
+    # Critically Endangered
+    "amur leopard": ("Critically Endangered", "CR", "#F44336"),
+    "sumatran orangutan": ("Critically Endangered", "CR", "#F44336"),
+    "black rhino": ("Critically Endangered", "CR", "#F44336"),
+    "northern white rhino": ("Critically Endangered", "CR", "#F44336"),
+    "hawksbill turtle": ("Critically Endangered", "CR", "#F44336"),
+    "kakapo": ("Critically Endangered", "CR", "#F44336"),
+    # Birds
+    "eagle": ("Least Concern", "LC", "#4CAF50"),
+    "hawk": ("Least Concern", "LC", "#4CAF50"),
+    "parrot": ("Least Concern", "LC", "#4CAF50"),
+    "penguin": ("Least Concern", "LC", "#4CAF50"),
+    # Reptiles
+    "crocodile": ("Least Concern", "LC", "#4CAF50"),
+    "alligator": ("Least Concern", "LC", "#4CAF50"),
+    "komodo dragon": ("Endangered", "EN", "#FF5722"),
+}
+
+# All domestic dog breeds are "domesticated" — least concern
+DOG_BREED_KEYWORDS = [
+    "retriever", "labrador", "poodle", "bulldog", "beagle", "shepherd",
+    "rottweiler", "dachshund", "husky", "boxer", "chihuahua", "pug",
+    "spaniel", "terrier", "setter", "pointer", "collie", "maltese",
+    "bichon", "corgi", "dalmatian", "doberman", "mastiff", "schnauzer",
+    "shih", "akita", "samoyed", "malamute", "vizsla", "weimaraner",
+]
+
+
+def get_conservation_status(species: str) -> dict:
+    """Get conservation status for a species using offline lookup."""
+    lower = species.lower().strip()
+
+    # Check if it's a dog breed
+    for kw in DOG_BREED_KEYWORDS:
+        if kw in lower:
+            return {
+                "species": species,
+                "status": "Least Concern",
+                "code": "LC",
+                "color": "#4CAF50",
+                "description": f"The {species} is a domesticated breed with a stable global population.",
+            }
+
+    # Check full name match
+    if lower in CONSERVATION_STATUS:
+        status, code, color = CONSERVATION_STATUS[lower]
+        return {"species": species, "status": status, "code": code, "color": color,
+                "description": f"IUCN Red List status for {species}: {status}"}
+
+    # Check partial keyword match
+    for key, (status, code, color) in CONSERVATION_STATUS.items():
+        if key in lower or lower in key:
+            return {"species": species, "status": status, "code": code, "color": color,
+                    "description": f"IUCN Red List status for {species}: {status}"}
+
+    # Default
+    return {
+        "species": species,
+        "status": "Data Deficient",
+        "code": "DD",
+        "color": "#9E9E9E",
+        "description": f"Conservation status for {species} is not available in our database.",
+    }
+
+
+# ─── Database ─────────────────────────────────────────────────────────────────
 
 def get_db():
-    """Get a database connection."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def hash_password(password: str) -> str:
-    """Hash a password with SHA-256."""
     return hashlib.sha256(password.encode()).hexdigest()
 
 
 def init_db():
-    """Initialize the database and seed default users."""
     conn = get_db()
     cursor = conn.cursor()
 
-    # Create users table
+    # Users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,32 +166,52 @@ def init_db():
         )
     """)
 
-    # Seed default users (only if they don't exist)
-    default_users = [
-        ("admin@wildvision.com", "wild123"),
-        ("user@wildvision.com", "user123"),
-    ]
-    for email, password in default_users:
+    # Sightings table (for map)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sightings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            animal_name TEXT NOT NULL,
+            confidence REAL DEFAULT 0.0,
+            latitude REAL DEFAULT 0.0,
+            longitude REAL DEFAULT 0.0,
+            user_email TEXT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Detection history table (per user journal)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS detection_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            animal_name TEXT NOT NULL,
+            confidence REAL DEFAULT 0.0,
+            info TEXT,
+            conservation_status TEXT,
+            conservation_code TEXT,
+            user_email TEXT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Seed default users
+    for email, password in [("admin@wildvision.com", "wild123"), ("user@wildvision.com", "user123")]:
         try:
             cursor.execute(
                 "INSERT INTO users (email, password_hash) VALUES (?, ?)",
                 (email, hash_password(password))
             )
         except sqlite3.IntegrityError:
-            pass  # User already exists
+            pass
 
     conn.commit()
     conn.close()
 
 
-# Initialize DB on startup
 init_db()
-
-# In-memory session tokens
 active_tokens = {}
 
 
-# ─── Request/Response Models ─────────────────────────────────────────────────
+# ─── Request / Response Models ────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
     email: str
@@ -113,69 +232,66 @@ class CareRequest(BaseModel):
     animal_name: str
 
 
-# ─── Auth Endpoints ──────────────────────────────────────────────────────────
+class SightingRequest(BaseModel):
+    animal_name: str
+    confidence: float = 0.0
+    latitude: float = 0.0
+    longitude: float = 0.0
+    user_email: str = ""
+
+
+class HistorySaveRequest(BaseModel):
+    animal_name: str
+    confidence: float = 0.0
+    info: str = ""
+    conservation_status: str = ""
+    conservation_code: str = ""
+    user_email: str = ""
+
+
+# ─── Auth ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/login")
 async def login(request: LoginRequest):
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
+    user = conn.execute(
         "SELECT * FROM users WHERE email = ? AND password_hash = ?",
         (request.email, hash_password(request.password))
-    )
-    user = cursor.fetchone()
+    ).fetchone()
     conn.close()
-
     if user:
         token = str(uuid.uuid4())
         active_tokens[token] = request.email
-        return {
-            "success": True,
-            "token": token,
-            "message": "Welcome to WildVision!"
-        }
+        return {"success": True, "token": token, "message": "Welcome to WildVision!"}
     raise HTTPException(status_code=401, detail="Invalid email or password")
 
 
 @app.post("/api/register")
 async def register(request: RegisterRequest):
-    # Validate email format (basic check)
     if not request.email or "@" not in request.email:
         raise HTTPException(status_code=400, detail="Invalid email address")
-
-    # Validate password length
     if not request.password or len(request.password) < 4:
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
-
     conn = get_db()
-    cursor = conn.cursor()
-
     try:
-        cursor.execute(
+        conn.execute(
             "INSERT INTO users (email, password_hash) VALUES (?, ?)",
             (request.email, hash_password(request.password))
         )
         conn.commit()
         conn.close()
-
-        # Auto-login after registration
         token = str(uuid.uuid4())
         active_tokens[token] = request.email
-        return {
-            "success": True,
-            "token": token,
-            "message": "Account created! Welcome to WildVision!"
-        }
+        return {"success": True, "token": token, "message": "Account created! Welcome to WildVision!"}
     except sqlite3.IntegrityError:
         conn.close()
         raise HTTPException(status_code=409, detail="Email already registered")
 
 
-# ─── Detection ───────────────────────────────────────────────────────────────
+# ─── Detection ────────────────────────────────────────────────────────────────
 
 @app.post("/api/detect")
 async def detect(file: UploadFile = File(...)):
-    # Save uploaded file
     file_ext = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
     unique_name = f"{uuid.uuid4()}{file_ext}"
     file_path = os.path.join(UPLOAD_DIR, unique_name)
@@ -183,13 +299,12 @@ async def detect(file: UploadFile = File(...)):
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Run YOLO detection
     result = detect_animal(file_path)
-
-    # Get AI info about the detected animal
     info = get_animal_info(result["name"])
 
-    # Cleanup uploaded file
+    # Get conservation status
+    conservation = get_conservation_status(result["name"])
+
     try:
         os.remove(file_path)
     except OSError:
@@ -199,46 +314,149 @@ async def detect(file: UploadFile = File(...)):
         "detection": result["name"],
         "confidence": result["confidence"],
         "info": info,
-        "all_detections": result.get("all_detections", [])
+        "all_detections": result.get("all_detections", []),
+        "conservation_status": conservation["status"],
+        "conservation_code": conservation["code"],
+        "conservation_color": conservation["color"],
+        "conservation_description": conservation["description"],
     }
 
 
-# ─── Chat ────────────────────────────────────────────────────────────────────
+# ─── Chat ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     response = answer_question(request.animal_name, request.question)
-    return {
-        "response": response
-    }
+    return {"response": response}
 
 
-# ─── Care Packages ───────────────────────────────────────────────────────────
+# ─── Care Packages ────────────────────────────────────────────────────────────
 
 @app.post("/api/care-packages")
 async def care_packages(request: CareRequest):
-    data = generate_care_packages(request.animal_name)
-    return data
+    return generate_care_packages(request.animal_name)
 
 
-# ─── View Users (Admin) ──────────────────────────────────────────────────────
+# ─── Conservation Status ──────────────────────────────────────────────────────
+
+@app.get("/api/conservation/{species}")
+async def conservation(species: str):
+    return get_conservation_status(species)
+
+
+# ─── Sightings Map ────────────────────────────────────────────────────────────
+
+@app.post("/api/sighting")
+async def save_sighting(request: SightingRequest):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO sightings (animal_name, confidence, latitude, longitude, user_email, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        (request.animal_name, request.confidence, request.latitude, request.longitude,
+         request.user_email, datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Sighting saved to map!"}
+
+
+@app.get("/api/sightings")
+async def get_sightings():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, animal_name, confidence, latitude, longitude, user_email, timestamp FROM sightings ORDER BY timestamp DESC LIMIT 500"
+    ).fetchall()
+    conn.close()
+    return {"sightings": [dict(r) for r in rows]}
+
+
+# ─── Detection History ────────────────────────────────────────────────────────
+
+@app.post("/api/history")
+async def save_history(request: HistorySaveRequest):
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO detection_history
+           (animal_name, confidence, info, conservation_status, conservation_code, user_email, timestamp)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (request.animal_name, request.confidence, request.info,
+         request.conservation_status, request.conservation_code,
+         request.user_email, datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+
+@app.get("/api/history/{email}")
+async def get_history(email: str):
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT id, animal_name, confidence, info, conservation_status, conservation_code, timestamp
+           FROM detection_history WHERE user_email = ? ORDER BY timestamp DESC LIMIT 100""",
+        (email,)
+    ).fetchall()
+    conn.close()
+    return {"history": [dict(r) for r in rows]}
+
+
+# ─── Analytics / Stats ────────────────────────────────────────────────────────
+
+@app.get("/api/stats/{email}")
+async def get_stats(email: str):
+    conn = get_db()
+
+    total = conn.execute(
+        "SELECT COUNT(*) as cnt FROM detection_history WHERE user_email = ?", (email,)
+    ).fetchone()["cnt"]
+
+    top_breeds = conn.execute(
+        """SELECT animal_name, COUNT(*) as count
+           FROM detection_history WHERE user_email = ?
+           GROUP BY animal_name ORDER BY count DESC LIMIT 5""",
+        (email,)
+    ).fetchall()
+
+    latest = conn.execute(
+        """SELECT animal_name, timestamp FROM detection_history
+           WHERE user_email = ? ORDER BY timestamp DESC LIMIT 1""",
+        (email,)
+    ).fetchone()
+
+    rarest = conn.execute(
+        """SELECT animal_name, conservation_code FROM detection_history
+           WHERE user_email = ? AND conservation_code IN ('CR','EN','VU')
+           ORDER BY CASE conservation_code WHEN 'CR' THEN 1 WHEN 'EN' THEN 2 ELSE 3 END
+           LIMIT 1""",
+        (email,)
+    ).fetchone()
+
+    conn.close()
+
+    return {
+        "total_scans": total,
+        "top_breeds": [{"name": r["animal_name"], "count": r["count"]} for r in top_breeds],
+        "latest_detection": dict(latest) if latest else None,
+        "rarest_find": dict(rarest) if rarest else None,
+    }
+
+
+# ─── Admin ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/users")
 async def list_users():
-    """View all registered users (no passwords shown)."""
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, email, created_at FROM users ORDER BY created_at DESC")
-    users = [dict(row) for row in cursor.fetchall()]
+    users = [dict(r) for r in conn.execute(
+        "SELECT id, email, created_at FROM users ORDER BY created_at DESC"
+    ).fetchall()]
     conn.close()
     return {"total": len(users), "users": users}
 
 
-# ─── Health Check ────────────────────────────────────────────────────────────
+# ─── Health ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "WildVision API"}
+    return {"status": "ok", "service": "WildVision API", "version": "2.0.0"}
 
 
 if __name__ == "__main__":

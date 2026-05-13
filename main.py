@@ -310,6 +310,33 @@ async def detect(file: UploadFile = File(...)):
     except OSError:
         pass
 
+    # Automatically save to database for Gamification/Community tab updates
+    animal_name = result["name"]
+    confidence = result["confidence"]
+    status_code = conservation["code"]
+    status_desc = conservation["status"]
+    
+    # Use default user for the demo (or extract from token if implemented)
+    user_email = "user@wildvision.com"
+    timestamp = datetime.utcnow().isoformat()
+    
+    # Add to sightings map feed (mock lat/long for demo or you could send it from Android)
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO sightings (animal_name, confidence, latitude, longitude, user_email, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        (animal_name, confidence, 0.0, 0.0, user_email, timestamp)
+    )
+    
+    # Add to detection history for leaderboards and achievements
+    conn.execute(
+        """INSERT INTO detection_history
+           (animal_name, confidence, info, conservation_status, conservation_code, user_email, timestamp)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (animal_name, confidence, info, status_desc, status_code, user_email, timestamp)
+    )
+    conn.commit()
+    conn.close()
+
     return {
         "detection": result["name"],
         "confidence": result["confidence"],

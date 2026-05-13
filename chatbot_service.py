@@ -207,50 +207,50 @@ def answer_question(animal_name: str, question: str) -> str:
 
 
 def generate_care_packages(animal_name: str) -> dict:
-    """Generate 3 tiered care packages (Basic, Standard, Premium) for the animal."""
+    """Generate 3 tiered care packages (Basic, Standard, Premium) for the animal in INR."""
     prompt = (
         f"You are a veterinary and pet store assistant. The user has a '{animal_name}'.\n"
-        f"Generate 3 care packages (Basic, Standard, Premium) including food, vet needs, "
-        f"and medical necessities (antibiotics, vaccines) with estimated USD prices.\n\n"
+        f"Generate 3 distinct care packages (Basic/Low-Budget, Standard/Mid-Range, Premium/High-End) "
+        f"with clear price variations in Indian Rupees (₹). Include food, vet needs, "
+        f"and medical necessities (antibiotics, vaccines).\n\n"
         f"You MUST reply ONLY with a valid JSON object matching this exact structure, nothing else:\n"
         f"{{\n"
         f"  \"packages\": [\n"
         f"    {{\n"
         f"      \"tier\": \"Basic\",\n"
-        f"      \"description\": \"Essential care items.\",\n"
-        f"      \"total_price\": \"$50\",\n"
+        f"      \"description\": \"Essential care items on a budget.\",\n"
+        f"      \"total_price\": \"₹4000\",\n"
         f"      \"items\": [\n"
-        f"        {{\"name\": \"Standard Kibble\", \"price\": \"$20\"}},\n"
-        f"        {{\"name\": \"Basic Vet Checkup\", \"price\": \"$30\"}}\n"
+        f"        {{\"name\": \"Standard Kibble\", \"price\": \"₹1500\"}},\n"
+        f"        {{\"name\": \"Basic Vet Checkup\", \"price\": \"₹2500\"}}\n"
         f"      ]\n"
         f"    }}\n"
         f"  ]\n"
         f"}}\n\n"
-        f"Output ONLY valid JSON. Do not include markdown code blocks (```json)."
+        f"Output ONLY valid JSON. No conversational text before or after."
     )
 
     response_text = _get_provider().generate(prompt)
 
-    # Clean up markdown fences if present
-    response_text = response_text.strip()
-    for fence in ("```json", "```"):
-        if response_text.startswith(fence):
-            response_text = response_text[len(fence):]
-    if response_text.endswith("```"):
-        response_text = response_text[:-3]
-    response_text = response_text.strip()
+    # Robust JSON extraction to prevent parsing errors when LLM includes markdown or conversational text
+    import re
+    match = re.search(r'\{.*\}', response_text, re.DOTALL)
+    if match:
+        json_str = match.group(0)
+    else:
+        json_str = response_text
 
     try:
-        return json.loads(response_text)
+        return json.loads(json_str)
     except Exception as e:
         logger.error(f"Failed to parse care packages JSON: {e}\nResponse was: {response_text}")
         return {
             "packages": [
                 {
                     "tier": "Error",
-                    "description": "Failed to generate care packages.",
-                    "total_price": "$0",
-                    "items": [{"name": "Please try again later.", "price": "$0"}],
+                    "description": "Failed to generate care packages. Please try again.",
+                    "total_price": "₹0",
+                    "items": [{"name": "Error fetching data", "price": "₹0"}],
                 }
             ]
         }
